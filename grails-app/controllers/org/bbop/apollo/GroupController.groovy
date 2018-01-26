@@ -84,7 +84,7 @@ class GroupController {
                 log.debug "filtering groups"
 
                 filteredGroups = groups.findAll(){
-                    it.metadata == null || it.getMetaData("creator") == (permissionService.currentUser.id as String)
+                    it.metadata == null || it.getMetaData("creator") == (permissionService.currentUser.id as String) || permissionService.isGroupAdmin(it, permissionService.currentUser)
                 }
             }
 
@@ -105,6 +105,17 @@ class GroupController {
                     userArray.add(userObject)
                 }
                 groupObject.users = userArray
+
+                JSONArray adminArray = new JSONArray()
+                it.admin.each { user ->
+                    JSONObject userObject = new JSONObject()
+                    userObject.id = user.id
+                    userObject.email = user.username
+                    userObject.firstName = user.firstName
+                    userObject.lastName = user.lastName
+                    adminArray.add(userObject)
+                }
+                groupObject.admin = adminArray
 
                 // add organism permissions
                 JSONArray organismPermissionsArray = new JSONArray()
@@ -362,6 +373,7 @@ class GroupController {
         }
         log.info "Trying to update user group membership"
         UserGroup groupInstance = UserGroup.findById(dataObject.groupId)
+
         List<User> oldUsers = groupInstance.users as List
         List<String> usernames = dataObject.users
         List<User> newUsers = User.findAllByUsernameInList(usernames)
@@ -381,10 +393,49 @@ class GroupController {
         }
 
         groupInstance.save(flush: true)
-
         log.info "Updated group ${groupInstance.name} membership setting users ${newUsers.join(' ')}"
 
         loadGroups()
     }
+
+    @RestApiMethod(description = "Update group admin", path = "/group/updateGroupAdmin", verb = RestApiVerb.POST)
+    @RestApiParams(params = [
+            @RestApiParam(name = "username", type = "email", paramType = RestApiParamType.QUERY)
+            , @RestApiParam(name = "password", type = "password", paramType = RestApiParamType.QUERY)
+            , @RestApiParam(name = "groupId", type = "long", paramType = RestApiParamType.QUERY, description = "Group ID to alter membership of")
+            , @RestApiParam(name = "users", type = "JSONArray", paramType = RestApiParamType.QUERY, description = "A JSON array of strings of emails of users the now belong to the group")
+    ]
+    )
+    @Transactional
+    def updateGroupAdmin() {
+        JSONObject dataObject = permissionService.handleInput(request, params)
+        if (!permissionService.hasGlobalPermissions(dataObject, PermissionEnum.ADMINISTRATE)) {
+            render status: HttpStatus.UNAUTHORIZED.value()
+            return
+        }
+        log.info "Trying to update group admin"
+        UserGroup groupInstance = UserGroup.findById(dataObject.groupId)
+        List<User> oldUsers = groupInstance.admin as List
+        println "Oldusers: ${oldUsers}"
+        List<String> usernames = dataObject.users
+        println "usernames: ${usernames}"
+        List<User> newUsers = User.findAllByUsernameInList(usernames)
+        List<User> usersToAdd = newUsers - oldUsers
+        List<User> usersToRemove = oldUsers - newUsers
+        usersToAdd.each {
+            println "adding ${it}"
+            groupInstance.addToAdmin(it)
+        }
+        usersToRemove.each {
+            println "removing ${it}"
+            groupInstance.removeFromAdmin(it)
+        }
+        println "updated admin: ${groupInstance.admin as List}"
+
+        groupInstance.save(flush: true)
+        log.info "Updated group ${groupInstance.name} admin ${newUsers.join(' ')}"
+        loadGroups()
+    }
+
 
 }
